@@ -17,6 +17,7 @@ This module contains the available built-in noisy
 quantum channels supported by PennyLane, as well as their conventions.
 """
 import warnings
+from itertools import product
 
 from pennylane import math as np
 from pennylane.operation import AnyWires, Channel
@@ -339,6 +340,122 @@ class DepolarizingChannel(Channel):
             np.array([[1, 0], [0, -1]], dtype=complex), p
         )
         return [K0, K1, K2, K3]
+
+
+
+class NDepolarizingChannel(Channel):
+    r"""
+    Multi-qubit symmetrically depolarizing error channel.
+
+    This channel is modeled by the following multi-qubit Kraus matrices:
+
+    .. math::
+        K_0 = \sqrt{1-p} \begin{bmatrix}
+                1 & 0 & \cdots & 0 \\
+                0 & 1 & \cdots & 0 \\
+                \vdots & \vdots & \ddots & \vdots \\
+                0 & 0 & \cdots & 1
+                \end{bmatrix}
+
+    .. math::
+        K_i = \sqrt{p / (4^n - 1)} P_i \quad \text{for} \quad i = 1, \ldots, 4^n - 1
+
+    where :math:`P_i` represents the :math:`i`-th Pauli operator applied to the multi-qubit system, :math:`n` is the number of qubits, y :math:`p \in [0, 1]` is the depolarization probability which is equally
+    divided among all Pauli operations.
+
+    .. note::
+
+        Multiple equivalent definitions of the Kraus operators :math:`\{K_0 \ldots K_{4^n - 1}\}` exist in
+        the literature. Here, we generalize the single-qubit definition to multiple qubits by extending the Pauli operators to the multi-qubit case.
+
+        * For :math:`p = 0`, the channel will be an Identity channel, i.e., a noise-free channel.
+        * For :math:`p = \frac{4^n - 1}{4^n}`, the channel will be a fully depolarizing channel.
+        * For :math:`p = 1`, the channel will be a uniform Pauli error channel.
+
+    **Details:**
+
+    * Number of wires: n
+    * Number of parameters: 1
+
+    Args:
+        p (float): Each Pauli gate is applied with equal probability :math:`\frac{p}{4^n - 1}`
+        wires (Sequence[int] or int): the wires the channel acts on
+        id (str or None): String representing the operation (optional)
+    """
+
+    num_params = 1
+    num_wires = Any
+    grad_method = "A"
+
+    def __init__(self, p, wires, id=None):
+        super().__init__(p, wires=wires, id=id)
+
+    @staticmethod
+    def pauli_matrix(pauli_string):
+        """
+        Create the matrix representation of a Pauli string.
+
+        Args:
+            pauli_string (str): A string representing a Pauli operator (e.g., 'IXY')
+
+        Returns:
+            array: The matrix representation of the Pauli string.
+        """
+        pauli_dict = {
+            'I': np.eye(2),
+            'X': np.array([[0, 1], [1, 0]]),
+            'Y': np.array([[0, -1j], [1j, 0]]),
+            'Z': np.array([[1, 0], [0, -1]])
+        }
+        matrices = [pauli_dict[p] for p in pauli_string]
+        return np.kron(*matrices)
+
+    @staticmethod
+    def compute_kraus_matrices(p, num_qubits):
+        r"""
+        Kraus matrices representing the multi-qubit depolarizing channel.
+
+        Args:
+            p (float): depolarizing error parameter
+            num_qubits (int): the number of qubits for the error channel
+
+        Returns:
+            list (array): list of Kraus matrices
+        """
+        if not isinstance(num_qubits, int) or num_qubits < 1:
+            raise ValueError("num_qubits must be a positive integer.")
+
+       
+        num_terms = 4**num_qubits
+        max_param = num_terms / (num_terms - 1)
+        if p < 0 or p > max_param:
+            raise ValueError(f"Depolarizing parameter must be in between 0 and {max_param}.")
+
+        
+        prob_iden = 1 - p / max_param
+        prob_pauli = p / num_terms
+        probs = [prob_iden] + (num_terms - 1) * [prob_pauli]
+
+        
+        paulis = ["".join(tup) for tup in product('IXYZ', repeat=num_qubits)]
+
+        
+        matrices = []
+        for pauli_string, prob in zip(paulis, probs):
+            matrices.append(np.sqrt(prob) * NDepolarizingChannel.pauli_matrix(pauli_string))
+
+        return matrices
+
+    def get_matrices(self):
+        """
+        Returns the Kraus matrices of the channel for the given parameters.
+
+        Returns:
+            list (array): list of Kraus matrices
+        """
+        return self.compute_kraus_matrices(self.parameters[0], len(self.wires))
+
+
 
 
 class BitFlip(Channel):
